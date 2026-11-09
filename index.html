@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ミルル トラッカー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;800&display=swap">
+<style>
+/* 画面いっぱいにキャラ、下に操作パネル。色は1種類の見た目で固定 */
+:root{
+  --ink:#3b2838; --muted:#6a5364; --pink:#c93d7b; --pink-soft:#ffe3ef; --line:#ecdce7;
+  --panel:rgba(255,255,255,.94); --ok:#137a70; --warn:#a8480f;
+  --font:"M PLUS Rounded 1c","Hiragino Maru Gothic ProN","Hiragino Sans",sans-serif;
+  color-scheme:light;
+}
+html,body{margin:0;height:100%;overflow:hidden;background:#f6dce8;color:var(--ink);font-family:var(--font);-webkit-tap-highlight-color:transparent}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+.status{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:calc(env(safe-area-inset-left,0px) + 12px);
+  background:var(--panel);color:var(--ink);font-size:13px;font-weight:800;padding:6px 12px;border-radius:999px;
+  display:flex;align-items:center;gap:7px;box-shadow:0 2px 10px rgba(80,30,60,.12);max-width:calc(100vw - 150px)}
+.status i{width:9px;height:9px;border-radius:50%;background:#b9a8b4;flex:none}
+.status.ok i{background:#27b39f}.status.warn i{background:#e0802f}
+
+#cam{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:calc(env(safe-area-inset-right,0px) + 12px);
+  width:90px;height:120px;object-fit:cover;border-radius:14px;transform:scaleX(-1);border:2px solid #fff;
+  background:#2a1e28;box-shadow:0 2px 10px rgba(80,30,60,.2);transition:opacity .2s}
+#cam.off{opacity:0;pointer-events:none}
+
+.panel{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-radius:22px 22px 0 0;
+  padding-top:12px;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px);
+  padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px));
+  display:grid;gap:9px;max-height:44vh;overflow-y:auto;box-shadow:0 -4px 20px rgba(80,30,60,.12);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.lbl{font-size:12px;font-weight:800;color:var(--muted);letter-spacing:.06em;width:3.6em;flex:none}
+button,.filebtn{appearance:none;border:1.5px solid var(--line);background:#fff;color:var(--ink);font:700 14px var(--font);
+  padding:8px 13px;border-radius:999px;cursor:pointer;line-height:1.2}
+button[aria-pressed="true"]{background:var(--pink);border-color:var(--pink);color:#fff}
+.primary{background:var(--pink);border-color:var(--pink);color:#fff}
+.soft{background:var(--pink-soft);border-color:transparent}
+button:disabled{opacity:.45}
+button:focus-visible,.filebtn:focus-within{outline:3px solid var(--ok);outline-offset:2px}
+.filebtn input{position:absolute;width:1px;height:1px;opacity:0}
+.filebtn{position:relative;display:inline-block}
+
+#menuBtn{position:fixed;right:calc(env(safe-area-inset-right,0px) + 14px);bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
+  opacity:.5;display:none}
+body.clean .panel,body.clean .status{display:none}
+body.clean #menuBtn{display:block}
+body.clean #cam{opacity:0;pointer-events:none}
+
+.welcome{position:fixed;inset:0;display:grid;place-items:center;padding:24px;padding-bottom:46vh;pointer-events:none}
+.welcome .card{pointer-events:auto;background:var(--panel);border-radius:22px;padding:18px 20px;max-width:320px;text-align:center;
+  box-shadow:0 4px 20px rgba(80,30,60,.12)}
+.welcome h1{margin:0 0 6px;font-size:20px;font-weight:800;color:var(--pink)}
+.welcome p{margin:0;font-size:14px;line-height:1.6;color:var(--muted)}
+.welcome[hidden]{display:none}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<video id="cam" class="off" playsinline muted autoplay></video>
+<div class="status" id="status"><i></i><span id="statusText">モデルを選んでください</span></div>
+
+<div class="welcome" id="welcome">
+  <div class="card">
+    <h1>ミルル トラッカー</h1>
+    <p>VRoid Studioで書き出した <b>.vrm</b> を選んで、カメラを開始すると、顔の動きに合わせてキャラが動きます。</p>
+  </div>
+</div>
+
+<div class="panel" id="panel">
+  <div class="row">
+    <label class="filebtn primary">モデルを選ぶ<input type="file" id="file" accept=".vrm,model/gltf-binary,application/octet-stream"></label>
+    <button id="camBtn" class="primary" type="button">カメラ開始</button>
+    <button id="resetBtn" class="soft" type="button" disabled>正面をリセット</button>
+  </div>
+  <div class="row"><span class="lbl">表情</span>
+    <button data-emo="" aria-pressed="true">自動</button>
+    <button data-emo="happy" aria-pressed="false">にこにこ</button>
+    <button data-emo="surprised" aria-pressed="false">びっくり</button>
+    <button data-emo="angry" aria-pressed="false">ぷんぷん</button>
+    <button data-emo="sad" aria-pressed="false">しょんぼり</button>
+    <button data-emo="relaxed" aria-pressed="false">ほっこり</button>
+  </div>
+  <div class="row"><span class="lbl">背景</span>
+    <button data-bg="#f6dce8" aria-pressed="true">ピンク</button>
+    <button data-bg="#d6f3ec" aria-pressed="false">ミント</button>
+    <button data-bg="#2b2150" aria-pressed="false">よぞら</button>
+    <button data-bg="#00b140" aria-pressed="false">グリーン</button>
+  </div>
+  <div class="row"><span class="lbl">ズーム</span>
+    <button data-zoom="0.72" aria-pressed="false">アップ</button>
+    <button data-zoom="1" aria-pressed="true">ふつう</button>
+    <button data-zoom="1.6" aria-pressed="false">ひき</button>
+  </div>
+  <div class="row"><span class="lbl">設定</span>
+    <button id="mirrorBtn" aria-pressed="true" type="button">鏡のように動く</button>
+    <button id="previewBtn" aria-pressed="false" type="button">カメラ映像</button>
+    <button id="cleanBtn" type="button">メニューを隠す</button>
+  </div>
+</div>
+<button id="menuBtn" type="button">メニュー</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+const MP_VER = '1.1.1';
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}`;
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const remap = (v, a, b) => clamp((v - a) / (b - a), 0, 1);
+
+/* ---------- 表示状態 ---------- */
+function setStatus(text, kind = '') {
+  $('statusText').textContent = text;
+  $('status').className = 'status' + (kind ? ' ' + kind : '');
+}
+
+/* ---------- three.js ---------- */
+const canvas = $('stage');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#f6dce8');
+const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 20);
+const light = new THREE.DirectionalLight(0xffffff, Math.PI);
+light.position.set(1, 1, 1).normalize();
+scene.add(light);
+
+let zoom = 1, headY = 1.35;
+function placeCamera() {
+  const aspect = camera.aspect;
+  const visH = Math.max(0.62, 0.5 / aspect) * zoom;   // 縦長の画面でも肩まで入るように
+  const d = visH / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+  const cy = headY - 0.1 * zoom + visH * 0.12;          // 下のパネルの分、少し上に寄せる
+  camera.position.set(0, cy, d);
+  camera.lookAt(0, cy, 0);
+}
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  placeCamera();
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- VRM 読み込み ---------- */
+const loader = new GLTFLoader();
+loader.register(parser => new VRMLoaderPlugin(parser));
+let vrm = null;
+
+$('file').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  setStatus('モデルを読み込み中…');
+  const url = URL.createObjectURL(f);
+  try {
+    const gltf = await loader.loadAsync(url);
+    const v = gltf.userData.vrm;
+    if (!v) throw new Error('VRMではありません');
+    VRMUtils.removeUnnecessaryVertices(gltf.scene);
+    VRMUtils.combineSkeletons(gltf.scene);
+    VRMUtils.rotateVRM0(v);
+    v.scene.traverse(o => { o.frustumCulled = false; });
+    if (vrm) { scene.remove(vrm.scene); VRMUtils.deepDispose(vrm.scene); }
+    vrm = v;
+    scene.add(vrm.scene);
+    if (vrm.lookAt) vrm.lookAt.autoUpdate = false;
+    restPose();
+    vrm.update(0);
+    const head = vrm.humanoid.getNormalizedBoneNode('head');
+    if (head) { const p = new THREE.Vector3(); head.getWorldPosition(p); headY = p.y; }
+    placeCamera();
+    $('welcome').hidden = true;
+    setStatus(landmarker ? '顔を探しています' : 'カメラを開始してください', landmarker ? '' : 'warn');
+  } catch (err) {
+    console.error(err);
+    setStatus('読み込めませんでした。.vrm ファイルを選んでください', 'warn');
+  } finally {
+    URL.revokeObjectURL(url);
+    e.target.value = '';
+  }
+});
+
+function bone(name) { return vrm ? vrm.humanoid.getNormalizedBoneNode(name) : null; }
+function restPose() {
+  // Tポーズの腕を下ろす
+  const set = (n, x, y, z) => { const b = bone(n); if (b) b.rotation.set(x, y, z); };
+  set('leftUpperArm', 0, 0, -1.2);
+  set('rightUpperArm', 0, 0, 1.2);
+  set('leftLowerArm', 0, -0.25, 0);
+  set('rightLowerArm', 0, 0.25, 0);
+}
+const hasExpr = n => !!(vrm && vrm.expressionManager && vrm.expressionManager.getExpression(n));
+const setExpr = (n, v) => { if (hasExpr(n)) vrm.expressionManager.setValue(n, v); };
+
+/* ---------- カメラと顔認識 ---------- */
+const video = $('cam');
+let landmarker = null, lastVideoTime = -1;
+const BS = ['eyeBlinkLeft','eyeBlinkRight','jawOpen','mouthFunnel','mouthPucker','mouthSmileLeft','mouthSmileRight',
+  'mouthStretchLeft','mouthStretchRight','eyeLookInLeft','eyeLookOutLeft','eyeLookInRight','eyeLookOutRight',
+  'eyeLookUpLeft','eyeLookUpRight','eyeLookDownLeft','eyeLookDownRight'];
+const bs = Object.fromEntries(BS.map(k => [k, 0]));
+const rawQ = new THREE.Quaternion(), offsetQ = new THREE.Quaternion();
+const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+let lastSeen = -99, mirror = true;
+
+$('camBtn').addEventListener('click', async () => {
+  const btn = $('camBtn');
+  btn.disabled = true;
+  try {
+    setStatus('カメラを準備中…');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    setStatus('顔認識を読み込み中…（初回は少し時間がかかります）');
+    const { FilesetResolver, FaceLandmarker } = await import(`${MP_URL}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+    const opts = delegate => ({
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      runningMode: 'VIDEO', numFaces: 1,
+      outputFaceBlendshapes: true, outputFacialTransformationMatrixes: true
+    });
+    try { landmarker = await FaceLandmarker.createFromOptions(fileset, opts('GPU')); }
+    catch (_) { landmarker = await FaceLandmarker.createFromOptions(fileset, opts('CPU')); }
+    btn.textContent = 'カメラ動作中';
+    $('resetBtn').disabled = false;
+    setStatus(vrm ? '顔を探しています' : 'モデルを選んでください');
+  } catch (err) {
+    console.error(err);
+    btn.disabled = false;
+    const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    setStatus(denied ? 'カメラが許可されていません。設定でSafariのカメラを許可してください' : '開始できませんでした。https のページで開いているか確認してください', 'warn');
+  }
+});
+
+function detect(now) {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  let r;
+  try { r = landmarker.detectForVideo(video, now); } catch (_) { return; }
+  const cats = r.faceBlendshapes && r.faceBlendshapes[0] && r.faceBlendshapes[0].categories;
+  const mats = r.facialTransformationMatrixes && r.facialTransformationMatrixes[0];
+  if (cats && mats) {
+    for (const c of cats) if (c.categoryName in bs) bs[c.categoryName] += (c.score - bs[c.categoryName]) * 0.6;
+    _m.fromArray(mats.data);
+    _m.decompose(_p, _q, _s);
+    rawQ.copy(_q);
+    lastSeen = now / 1000;
+    setStatus('トラッキング中', 'ok');
+  } else if (now / 1000 - lastSeen > 1) {
+    setStatus('顔が見つかりません', 'warn');
+  }
+}
+$('resetBtn').addEventListener('click', () => { offsetQ.copy(rawQ); });
+
+/* ---------- 動きの反映 ---------- */
+const cur = { yaw:0, pitch:0, roll:0, eyeYaw:0, eyePitch:0, bl:0, br:0, aa:0, ou:0, ee:0, smile:0, emo:0 };
+let emotion = '', prevEmotion = '', blinkT = 2, blinkPh = 0;
+
+function animate(dt, t) {
+  if (!vrm) return;
+  const seen = landmarker && t - lastSeen < 1;
+  const k = 1 - Math.pow(0.0008, dt);
+  let yaw, pitch, roll;
+  if (seen) {
+    _q.copy(offsetQ).invert().multiply(rawQ);
+    _e.setFromQuaternion(_q, 'YXZ');
+    yaw = _e.y; pitch = _e.x; roll = _e.z;
+    if (mirror) { yaw = -yaw; roll = -roll; }
+  } else {
+    yaw = Math.sin(t * .4) * .12; pitch = Math.sin(t * .31) * .04; roll = Math.sin(t * .23) * .04;
+  }
+  cur.yaw += (clamp(yaw, -.9, .9) - cur.yaw) * k;
+  cur.pitch += (clamp(pitch, -.6, .6) - cur.pitch) * k;
+  cur.roll += (clamp(roll, -.5, .5) - cur.roll) * k;
+
+  const rot = (n, x, y, z) => { const b = bone(n); if (b) { b.rotation.order = 'YXZ'; b.rotation.set(x, y, z); } };
+  const br = Math.sin(t * 2.1);
+  rot('head', cur.pitch * .6, cur.yaw * .6, cur.roll * .6);
+  rot('neck', cur.pitch * .4, cur.yaw * .4, cur.roll * .4);
+  rot('chest', br * .015, cur.yaw * .12, cur.roll * .1);
+  rot('spine', 0, cur.yaw * .08, cur.roll * .05);
+  restPose();
+  const lua = bone('leftUpperArm'), rua = bone('rightUpperArm');
+  if (lua) lua.rotation.z = -1.2 + br * .02;
+  if (rua) rua.rotation.z = 1.2 - br * .02;
+
+  // まばたき
+  let L, R;
+  if (seen) {
+    L = remap(bs.eyeBlinkLeft, .3, .7); R = remap(bs.eyeBlinkRight, .3, .7);
+    if (Math.abs(L - R) < .3) L = R = (L + R) / 2;
+    if (mirror) [L, R] = [R, L];
+  } else {
+    blinkT -= dt;
+    if (blinkT <= 0 && blinkPh === 0) blinkPh = 1e-4;
+    if (blinkPh > 0) { blinkPh += dt / .16; if (blinkPh >= 1) { blinkPh = 0; blinkT = 2 + Math.random() * 3; } }
+    L = R = blinkPh > 0 ? Math.sin(blinkPh * Math.PI) : 0;
+  }
+  const kf = Math.min(1, dt * 25);
+  cur.bl += (L - cur.bl) * kf; cur.br += (R - cur.br) * kf;
+
+  // 口
+  const aa = seen ? remap(bs.jawOpen, .04, .45) : 0;
+  const ou = seen ? remap(Math.max(bs.mouthFunnel, bs.mouthPucker), .15, .6) * .8 : 0;
+  const ee = seen ? remap((bs.mouthStretchLeft + bs.mouthStretchRight) / 2, .05, .4) * .6 : 0;
+  cur.aa += (aa * (1 - ou * .6) - cur.aa) * kf;
+  cur.ou += (ou - cur.ou) * kf;
+  cur.ee += (ee - cur.ee) * kf;
+
+  // 視線
+  let gy = 0, gp = 0;
+  if (seen) {
+    gy = ((bs.eyeLookOutLeft + bs.eyeLookInRight) - (bs.eyeLookInLeft + bs.eyeLookOutRight)) / 2 * 25;
+    gp = -((bs.eyeLookUpLeft + bs.eyeLookUpRight) - (bs.eyeLookDownLeft + bs.eyeLookDownRight)) / 2 * 15;
+    if (mirror) gy = -gy;
+  }
+  cur.eyeYaw += (gy - cur.eyeYaw) * kf; cur.eyePitch += (gp - cur.eyePitch) * kf;
+  if (vrm.lookAt) { vrm.lookAt.yaw = cur.eyeYaw; vrm.lookAt.pitch = cur.eyePitch; }
+
+  // 表情（手動ボタン優先、自動のときは笑顔だけ読み取る）
+  const smile = seen && !emotion ? remap((bs.mouthSmileLeft + bs.mouthSmileRight) / 2, .35, .8) * .75 : 0;
+  cur.smile += (smile - cur.smile) * Math.min(1, dt * 8);
+  cur.emo += ((emotion ? 1 : 0) - cur.emo) * Math.min(1, dt * 8);
+  for (const n of ['happy', 'surprised', 'angry', 'sad', 'relaxed']) setExpr(n, 0);
+  if (emotion) setExpr(emotion, cur.emo);
+  else if (prevEmotion && cur.emo > .01) setExpr(prevEmotion, cur.emo);
+  setExpr('happy', Math.max(emotion === 'happy' ? cur.emo : 0, cur.smile));
+  setExpr('blinkLeft', cur.bl); setExpr('blinkRight', cur.br);
+  setExpr('aa', cur.aa); setExpr('ou', cur.ou); setExpr('ee', cur.ee);
+}
+
+/* ---------- ループ ---------- */
+const clock = new THREE.Clock();
+function loop(nowMs) {
+  const dt = Math.min(clock.getDelta(), .05), t = nowMs / 1000;
+  detect(nowMs);
+  animate(dt, t);
+  if (vrm) vrm.update(dt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ---------- ボタン ---------- */
+function group(selector, attr, fn) {
+  const btns = [...document.querySelectorAll(selector)];
+  btns.forEach(b => b.addEventListener('click', () => {
+    btns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    fn(b.getAttribute(attr));
+  }));
+}
+group('[data-emo]', 'data-emo', v => {
+  if (v && vrm && !hasExpr(v)) setStatus('このモデルにはこの表情がありません', 'warn');
+  prevEmotion = emotion || prevEmotion; emotion = v;
+});
+group('[data-bg]', 'data-bg', v => { scene.background = new THREE.Color(v); });
+group('[data-zoom]', 'data-zoom', v => { zoom = parseFloat(v); placeCamera(); });
+
+$('mirrorBtn').addEventListener('click', e => {
+  mirror = !mirror; e.currentTarget.setAttribute('aria-pressed', String(mirror));
+});
+$('previewBtn').addEventListener('click', e => {
+  const on = video.classList.toggle('off') === false;
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+});
+$('cleanBtn').addEventListener('click', () => document.body.classList.add('clean'));
+$('menuBtn').addEventListener('click', () => document.body.classList.remove('clean'));
+</script>
+</body>
+</html>
